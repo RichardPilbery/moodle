@@ -31,7 +31,7 @@ defined('MOODLE_INTERNAL') || die();
  * @property-read array $other {
  *      Extra information about event.
  *
- *      - string concept: the concept of updated entry (after update).
+ *      - string concept: (optional) the concept of updated entry (after update).
  * }
  *
  * @package    mod_glossary
@@ -65,7 +65,7 @@ class entry_updated extends \core\event\base {
      */
     public function get_description() {
         return "The user with id '$this->userid' has updated the glossary entry with id '$this->objectid' in " .
-            "the glossary activity with the course module id '$this->contextinstanceid'.";
+            "the glossary activity with course module id '$this->contextinstanceid'.";
     }
 
     /**

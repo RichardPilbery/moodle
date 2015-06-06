@@ -29,10 +29,10 @@ defined('MOODLE_INTERNAL') || die();
  * The mod_workshop assessment_reevaluated event class.
  *
  * @property-read array $other {
- *     Extra information about the event.
+ *      Extra information about the event.
  *
- *     - float currentgrade: (may be null) current saved grade.
- *     - float finalgrade: (may be null) final grade.
+ *      - float currentgrade: (may be null) current saved grade.
+ *      - float finalgrade: (may be null) final grade.
  * }
  *
  * @package    mod_workshop
@@ -60,7 +60,7 @@ class assessment_reevaluated extends \core\event\base {
      */
     public function get_description() {
         return "The user with id '$this->userid' has had their assessment attempt reevaluated for the workshop with " .
-            "the course module id '$this->contextinstanceid'.";
+            "course module id '$this->contextinstanceid'.";
     }
 
     /**

@@ -57,7 +57,7 @@ class submission_updated extends \mod_assign\event\submission_updated {
      */
     public function get_description() {
         $descriptionstring = "The user with id '$this->userid' updated an online text submission with " .
-            "'{$this->other['onlinetextwordcount']}' words in the assignment with the course module id " .
+            "'{$this->other['onlinetextwordcount']}' words in the assignment with course module id " .
             "'$this->contextinstanceid'";
         if (!empty($this->other['groupid'])) {
             $descriptionstring .= " for the group with id '{$this->other['groupid']}'.";
@@ -77,7 +77,7 @@ class submission_updated extends \mod_assign\event\submission_updated {
     protected function validate_data() {
         parent::validate_data();
         if (!isset($this->other['onlinetextwordcount'])) {
-            throw new \coding_exception('Other must contain the key onlinetextwordcount.');
+            throw new \coding_exception('The \'onlinetextwordcount\' value must be set in other.');
         }
     }
 }

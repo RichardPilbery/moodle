@@ -965,7 +965,11 @@ class moodle_page {
             } else {
                 // We do not want devs to do weird switching of context levels on the fly because we might have used
                 // the context already such as in text filter in page title.
-                debugging("Coding problem: unsupported modification of PAGE->context from {$current} to {$context->contextlevel}");
+                // This is explicitly allowed for webservices though which may
+                // call "external_api::validate_context on many contexts in a single request.
+                if (!WS_SERVER) {
+                    debugging("Coding problem: unsupported modification of PAGE->context from {$current} to {$context->contextlevel}");
+                }
             }
         }
 
@@ -1428,7 +1432,7 @@ class moodle_page {
 
         // Now the real test and redirect!
         // NOTE: do NOT use this test for detection of https on current page because this code is not compatible with SSL proxies,
-        //       instead use (strpos($CFG->httpswwwroot, 'https:') === 0).
+        //       instead use is_https().
         if (strpos($FULLME, 'https:') !== 0) {
             // This may lead to infinite redirect on an incorrectly configured site.
             // In that case set $CFG->loginhttps=0; within /config.php.
@@ -1824,6 +1828,11 @@ class moodle_page {
      * @throws coding_exception
      */
     protected function ensure_theme_not_set() {
+        // This is explicitly allowed for webservices though which may process many course contexts in a single request.
+        if (WS_SERVER) {
+            return;
+        }
+
         if (!is_null($this->_theme)) {
             throw new coding_exception('The theme has already been set up for this page ready for output. ' .
                     'Therefore, you can no longer change the theme, or anything that might affect what ' .
@@ -1922,5 +1931,41 @@ class moodle_page {
             return $regionwas;
         }
         return $region;
+    }
+
+    /**
+     * Add a report node and a specific report to the navigation.
+     *
+     * @param int $userid The user ID that we are looking to add this report node to.
+     * @param array $nodeinfo Name and url of the final node that we are creating.
+     */
+    public function add_report_nodes($userid, $nodeinfo) {
+        global $USER;
+        // Try to find the specific user node.
+        $newusernode = $this->navigation->find('user' . $userid, null);
+        $reportnode = null;
+        $navigationnodeerror =
+                'Could not find the navigation node requested. Please check that the node you are looking for exists.';
+        if ($userid != $USER->id) {
+            // Check that we have a valid node.
+            if (empty($newusernode)) {
+                // Throw an error if we ever reach here.
+                throw new coding_exception($navigationnodeerror);
+            }
+            // Add 'Reports' to the user node.
+            $reportnode = $newusernode->add(get_string('reports'));
+        } else {
+            // We are looking at our own profile.
+            $myprofilenode = $this->settingsnav->find('myprofile', null);
+            // Check that we do end up with a valid node.
+            if (empty($myprofilenode)) {
+                // Throw an error if we ever reach here.
+                throw new coding_exception($navigationnodeerror);
+            }
+            // Add 'Reports' to our node.
+            $reportnode = $myprofilenode->add(get_string('reports'));
+        }
+        // Finally add the report to the navigation tree.
+        $reportnode->add($nodeinfo['name'], $nodeinfo['url'], navigation_node::TYPE_COURSE);
     }
 }

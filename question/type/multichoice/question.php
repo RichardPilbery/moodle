@@ -124,13 +124,6 @@ abstract class qtype_multichoice_base extends question_graded_automatically {
                     $args, $forcedownload);
         }
     }
-
-    public function make_html_inline($html) {
-        $html = preg_replace('~\s*<p>\s*~u', '', $html);
-        $html = preg_replace('~\s*</p>\s*~u', '<br />', $html);
-        $html = preg_replace('~(<br\s*/?>)+$~u', '', $html);
-        return trim($html);
-    }
 }
 
 
@@ -212,7 +205,8 @@ class qtype_multichoice_single_question extends qtype_multichoice_base {
         if (!isset($postdata['answer'])) {
             return array();
         } else {
-            return array('answer' => $this->answers[$this->order[$postdata['answer']]]->answer);
+            $answer = $this->answers[$this->order[$postdata['answer']]];
+            return array('answer' => clean_param($answer->answer, PARAM_NOTAGS));
         }
     }
 
@@ -414,7 +408,8 @@ class qtype_multichoice_multi_question extends qtype_multichoice_base {
     public function get_num_selected_choices(array $response) {
         $numselected = 0;
         foreach ($response as $key => $value) {
-            if (!empty($value)) {
+            // Response keys starting with _ are internal values like _order, so ignore them.
+            if (!empty($value) && $key[0] != '_') {
                 $numselected += 1;
             }
         }

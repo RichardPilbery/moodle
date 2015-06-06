@@ -92,7 +92,6 @@ abstract class moodleform_mod extends moodleform {
         $this->_features = new stdClass();
         $this->_features->groups            = plugin_supports('mod', $this->_modname, FEATURE_GROUPS, true);
         $this->_features->groupings         = plugin_supports('mod', $this->_modname, FEATURE_GROUPINGS, false);
-        $this->_features->groupmembersonly  = (!empty($CFG->enablegroupmembersonly) and plugin_supports('mod', $this->_modname, FEATURE_GROUPMEMBERSONLY, false));
         $this->_features->outcomes          = (!empty($CFG->enableoutcomes) and plugin_supports('mod', $this->_modname, FEATURE_GRADE_OUTCOMES, true));
         $this->_features->hasgrades         = plugin_supports('mod', $this->_modname, FEATURE_GRADE_HAS_GRADE, false);
         $this->_features->idnumber          = plugin_supports('mod', $this->_modname, FEATURE_IDNUMBER, true);
@@ -192,14 +191,11 @@ abstract class moodleform_mod extends moodleform {
         // otherwise you cannot turn it off at same time as turning off other
         // option (MDL-30764)
         if (empty($this->_cm) || !$this->_cm->groupingid) {
-            if ($mform->elementExists('groupmode') and !$mform->elementExists('groupmembersonly') and empty($COURSE->groupmodeforce)) {
+            if ($mform->elementExists('groupmode') && empty($COURSE->groupmodeforce)) {
                 $mform->disabledIf('groupingid', 'groupmode', 'eq', NOGROUPS);
 
-            } else if (!$mform->elementExists('groupmode') and $mform->elementExists('groupmembersonly')) {
-                $mform->disabledIf('groupingid', 'groupmembersonly', 'notchecked');
-
-            } else if (!$mform->elementExists('groupmode') and !$mform->elementExists('groupmembersonly')) {
-                // groupings have no use without groupmode or groupmembersonly
+            } else if (!$mform->elementExists('groupmode')) {
+                // Groupings have no use without groupmode.
                 if ($mform->elementExists('groupingid')) {
                     $mform->removeElement('groupingid');
                 }
@@ -292,6 +288,30 @@ abstract class moodleform_mod extends moodleform {
             // verify the idnumber
             if (!grade_verify_idnumber($data['cmidnumber'], $COURSE->id, $grade_item, $cm)) {
                 $errors['cmidnumber'] = get_string('idnumbertaken');
+            }
+        }
+
+        // Ratings: Don't let them select an aggregate type without selecting a scale.
+        // If the user has selected to use ratings but has not chosen a scale or set max points then the form is
+        // invalid. If ratings have been selected then the user must select either a scale or max points.
+        // This matches (horrible) logic in data_preprocessing.
+        if (isset($data['assessed']) && $data['assessed'] > 0 && empty($data['scale'])) {
+            $errors['assessed'] = get_string('scaleselectionrequired', 'rating');
+        }
+
+        // Grade to pass: ensure that the grade to pass is valid for points and scales.
+        // If we are working with a scale, convert into a positive number for validation.
+
+        if (isset($data['gradepass']) && (!empty($data['grade']) || !empty($data['scale']))) {
+            $scale = !empty($data['grade']) ? $data['grade'] : $data['scale'];
+            if ($scale < 0) {
+                $scalevalues = $DB->get_record('scale', array('id' => -$scale));
+                $grade = count(explode(',', $scalevalues->scale));
+            } else {
+                $grade = $scale;
+            }
+            if ($data['gradepass'] > $grade) {
+                $errors['gradepass'] = get_string('gradepassgreaterthangrade', 'grades', $grade);
             }
         }
 
@@ -417,8 +437,8 @@ abstract class moodleform_mod extends moodleform {
             $mform->addHelpButton('groupmode', 'groupmode', 'group');
         }
 
-        if ($this->_features->groupings or $this->_features->groupmembersonly) {
-            //groupings selector - used for normal grouping mode or also when restricting access with groupmembersonly
+        if ($this->_features->groupings) {
+            // Groupings selector - used to select grouping for groups in activity.
             $options = array();
             if ($groupings = $DB->get_records('groupings', array('courseid'=>$COURSE->id))) {
                 foreach ($groupings as $grouping) {
@@ -431,12 +451,15 @@ abstract class moodleform_mod extends moodleform {
             $mform->addHelpButton('groupingid', 'grouping', 'group');
         }
 
-        if ($this->_features->groupmembersonly) {
-            $mform->addElement('checkbox', 'groupmembersonly', get_string('groupmembersonly', 'group'));
-            $mform->addHelpButton('groupmembersonly', 'groupmembersonly', 'group');
-        }
-
         if (!empty($CFG->enableavailability)) {
+            // Add special button to end of previous section if groups/groupings
+            // are enabled.
+            if ($this->_features->groups || $this->_features->groupings) {
+                $mform->addElement('static', 'restrictgroupbutton', '',
+                        html_writer::tag('button', get_string('restrictbygroup', 'availability'),
+                        array('id' => 'restrictbygroup', 'disabled' => 'disabled')));
+            }
+
             // Availability field. This is just a textarea; the user interface
             // interaction is all implemented in JavaScript.
             $mform->addElement('header', 'availabilityconditionsheader',
@@ -617,6 +640,9 @@ abstract class moodleform_mod extends moodleform {
                     $mform->addElement('select', 'advancedgradingmethod_'.$areaname,
                         get_string('gradingmethod', 'core_grading'), $this->current->_advancedgradingdata['methods']);
                     $mform->addHelpButton('advancedgradingmethod_'.$areaname, 'gradingmethod', 'core_grading');
+                    if (!$this->_features->rating) {
+                        $mform->disabledIf('advancedgradingmethod_'.$areaname, 'grade[modgrade_type]', 'eq', 'none');
+                    }
 
                 } else {
                     // the module defines multiple gradable areas, display a selector
@@ -637,15 +663,48 @@ abstract class moodleform_mod extends moodleform {
                         get_string('gradecategoryonmodform', 'grades'),
                         grade_get_categories_menu($COURSE->id, $this->_outcomesused));
                 $mform->addHelpButton('gradecat', 'gradecategoryonmodform', 'grades');
+                if (!$this->_features->rating) {
+                    $mform->disabledIf('gradecat', 'grade[modgrade_type]', 'eq', 'none');
+                }
+            }
+
+            // Grade to pass.
+            $mform->addElement('text', 'gradepass', get_string('gradepass', 'grades'));
+            $mform->addHelpButton('gradepass', 'gradepass', 'grades');
+            $mform->setDefault('gradepass', '');
+            $mform->setType('gradepass', PARAM_FLOAT);
+            $mform->addRule('gradepass', null, 'numeric', null, 'client');
+            if (!$this->_features->rating) {
+                $mform->disabledIf('gradepass', 'grade[modgrade_type]', 'eq', 'none');
             }
         }
     }
 
-    function add_intro_editor($required=false, $customlabel=null) {
-        if (!$this->_features->introeditor) {
-            // intro editor not supported in this module
-            return;
-        }
+    /**
+     * Add an editor for an activity's introduction field.
+     * @deprecated since MDL-49101 - use moodleform_mod::standard_intro_elements() instead.
+     * @param null $required Override system default for requiremodintro
+     * @param null $customlabel Override default label for editor
+     * @throws coding_exception
+     */
+    protected function add_intro_editor($required=null, $customlabel=null) {
+        $str = "Function moodleform_mod::add_intro_editor() is deprecated, use moodleform_mod::standard_intro_elements() instead.";
+        debugging($str, DEBUG_DEVELOPER);
+
+        $this->standard_intro_elements($customlabel);
+    }
+
+
+    /**
+     * Add an editor for an activity's introduction field.
+     *
+     * @param null $customlabel Override default label for editor
+     * @throws coding_exception
+     */
+    protected function standard_intro_elements($customlabel=null) {
+        global $CFG;
+
+        $required = $CFG->requiremodintro;
 
         $mform = $this->_form;
         $label = is_null($customlabel) ? get_string('moduleintro') : $customlabel;

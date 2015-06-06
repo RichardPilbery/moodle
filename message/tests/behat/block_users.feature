@@ -8,11 +8,10 @@ Feature: Block users from contacting me
   Scenario: Block users from contacting me with Javascript enabled
     Given the following "users" exist:
       | username | firstname | lastname | email |
-      | user1 | User | One | one@asd.com |
-      | user2 | User | Two | two@asd.com |
+      | user1 | User | One | one@example.com |
+      | user2 | User | Two | two@example.com |
     And I log in as "user1"
-    And I expand "My profile" node
-    And I follow "Messages"
+    And I follow "Messages" in the user menu
     And I set the field "Search people and messages" to "User Two"
     And I press "Search people and messages"
     When I click on "Block contact" "link" in the "User Two" "table_row"
@@ -21,8 +20,7 @@ Feature: Block users from contacting me
     And I should see "User Two"
     And I log out
     And I log in as "user2"
-    And I expand "My profile" node
-    And I follow "Messages"
+    And I follow "Messages" in the user menu
     And I set the field "Search people and messages" to "User One"
     And I press "Search people and messages"
     And I follow "Send message to User One"

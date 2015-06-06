@@ -29,13 +29,6 @@ defined('MOODLE_INTERNAL') || die();
 /**
  * The mod_workshop assessable uploaded event class.
  *
- * @property-read array $other {
- *      Extra information about event.
- *
- *      - array pathnamehashes: uploaded files path name hashes.
- *      - string content: string.
- * }
- *
  * @package    mod_workshop
  * @since      Moodle 2.6
  * @copyright  2013 Frédéric Massart
@@ -57,7 +50,7 @@ class assessable_uploaded extends \core\event\assessable_uploaded {
      */
     public function get_description() {
         return "The user with id '$this->userid' has uploaded the submission with id '$this->objectid' " .
-            "to the workshop activity with the course module id '$this->contextinstanceid'.";
+            "to the workshop activity with course module id '$this->contextinstanceid'.";
     }
 
     /**

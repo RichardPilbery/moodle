@@ -23,6 +23,7 @@
  */
 
 require_once('../config.php');
+require_once($CFG->dirroot.'/user/lib.php');
 require_once($CFG->libdir.'/tablelib.php');
 require_once($CFG->libdir.'/filelib.php');
 
@@ -105,16 +106,8 @@ if (empty($rolenames) && !$isfrontpage) {
     }
 }
 
-$event = \core\event\user_list_viewed::create(array(
-    'objectid' => $course->id,
-    'courseid' => $course->id,
-    'context' => $context,
-    'other' => array(
-        'courseshortname' => $course->shortname,
-        'coursefullname' => $course->fullname
-    )
-));
-$event->trigger();
+// Trigger events.
+user_list_view($course, $context);
 
 $bulkoperations = has_capability('moodle/course:bulkmessaging', $context);
 
@@ -162,6 +155,7 @@ $PAGE->add_body_class('path-user');                     // So we can style it in
 $PAGE->set_other_editing_capability('moodle/course:manageactivities');
 
 echo $OUTPUT->header();
+echo $OUTPUT->heading(get_string('participants'));
 
 echo '<div class="userlist">';
 
@@ -363,7 +357,12 @@ if ($mode === MODE_BRIEF && !isset($hiddenfields['country'])) {
 }
 if (!isset($hiddenfields['lastaccess'])) {
     $tablecolumns[] = 'lastaccess';
-    $tableheaders[] = get_string('lastaccess');
+    if ($course->id == SITEID) {
+        // Exception case for viewing participants on site home.
+        $tableheaders[] = get_string('lastsiteaccess');
+    } else {
+        $tableheaders[] = get_string('lastcourseaccess');
+    }
 }
 
 if ($bulkoperations && $mode === MODE_USERDETAILS) {
@@ -405,11 +404,9 @@ list($esql, $params) = get_enrolled_sql($context, null, $currentgroup, true);
 $joins = array("FROM {user} u");
 $wheres = array();
 
-$extrasql = get_extra_user_fields_sql($context, 'u', '', array(
-        'id', 'username', 'firstname', 'lastname', 'email', 'city', 'country',
-        'picture', 'lang', 'timezone', 'maildisplay', 'imagealt', 'lastaccess'));
-
-$mainuserfields = user_picture::fields('u', array('username', 'email', 'city', 'country', 'lang', 'timezone', 'maildisplay'));
+$userfields = array('username', 'email', 'city', 'country', 'lang', 'timezone', 'maildisplay');
+$mainuserfields = user_picture::fields('u', $userfields);
+$extrasql = get_extra_user_fields_sql($context, 'u', '', $userfields);
 
 if ($isfrontpage) {
     $select = "SELECT $mainuserfields, u.lastaccess$extrasql";
@@ -494,8 +491,8 @@ $userlist = $DB->get_recordset_sql("$select $from $where $sort", $params, $table
 // If there are multiple Roles in the course, then show a drop down menu for switching.
 if (count($rolenames) > 1) {
     echo '<div class="rolesform">';
-    echo '<label for="rolesform_jump">'.get_string('currentrole', 'role').'&nbsp;</label>';
-    echo $OUTPUT->single_select($rolenamesurl, 'roleid', $rolenames, $roleid, null, 'rolesform');
+    echo $OUTPUT->single_select($rolenamesurl, 'roleid', $rolenames, $roleid, null,
+        'rolesform', array('label' => get_string('currentrole', 'role')));
     echo '</div>';
 
 } else if (count($rolenames) == 1) {
@@ -691,7 +688,7 @@ if ($mode === MODE_USERDETAILS) {    // Print simple listing.
 
                 $links = array();
 
-                if ($CFG->bloglevel > 0) {
+                if ($CFG->enableblogs && ($CFG->bloglevel != BLOG_USER_LEVEL || $USER->id == $user->id)) {
                     $links[] = html_writer::link(new moodle_url('/blog/index.php?userid='.$user->id), get_string('blogs', 'blog'));
                 }
 

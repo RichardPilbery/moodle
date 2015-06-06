@@ -29,9 +29,9 @@ defined('MOODLE_INTERNAL') || die();
  * The mod_workshop submission updated event class.
  *
  * @property-read array $other {
- *     Extra information about the event.
+ *      Extra information about the event.
  *
- *     - string submissiontitle: Submission title.
+ *      - string submissiontitle: (optional) Submission title.
  * }
  *
  * @package    mod_workshop
@@ -57,7 +57,7 @@ class submission_updated extends \core\event\base {
      */
     public function get_description() {
         return "The user with id '$this->userid' updated the submission with id '$this->objectid' for the workshop " .
-            "with the course module id '$this->contextinstanceid'.";
+            "with course module id '$this->contextinstanceid'.";
     }
 
     /**

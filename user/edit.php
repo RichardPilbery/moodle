@@ -34,6 +34,7 @@ $PAGE->https_required();
 
 $userid = optional_param('id', $USER->id, PARAM_INT);    // User id.
 $course = optional_param('course', SITEID, PARAM_INT);   // Course id (defaults to Site).
+$returnto = optional_param('returnto', null, PARAM_ALPHA);  // Code determining where to return to after save.
 $cancelemailchange = optional_param('cancelemailchange', 0, PARAM_INT);   // Course id (defaults to Site).
 
 $PAGE->set_url('/user/edit.php', array('course' => $course, 'id' => $userid));
@@ -103,16 +104,6 @@ if ($course->id == SITEID) {
 $systemcontext   = context_system::instance();
 $personalcontext = context_user::instance($user->id);
 
-$PAGE->set_pagelayout('admin');
-$PAGE->set_context($personalcontext);
-if ($USER->id != $user->id) {
-    $PAGE->navigation->extend_for_user($user);
-} else {
-    if ($node = $PAGE->navigation->find('myprofile', navigation_node::TYPE_ROOTNODE)) {
-        $node->force_open();
-    }
-}
-
 // Check access control.
 if ($user->id == $USER->id) {
     // Editing own profile - require_login() MUST NOT be used here, it would result in infinite loop!
@@ -138,6 +129,16 @@ if ($user->deleted) {
     echo $OUTPUT->heading(get_string('userdeleted'));
     echo $OUTPUT->footer();
     die;
+}
+
+$PAGE->set_pagelayout('admin');
+$PAGE->set_context($personalcontext);
+if ($USER->id != $user->id) {
+    $PAGE->navigation->extend_for_user($user);
+} else {
+    if ($node = $PAGE->navigation->find('myprofile', navigation_node::TYPE_ROOTNODE)) {
+        $node->force_open();
+    }
 }
 
 // Process email change cancellation.
@@ -172,19 +173,25 @@ $filemanageroptions = array('maxbytes'       => $CFG->maxbytes,
 file_prepare_draft_area($draftitemid, $filemanagercontext->id, 'user', 'newicon', 0, $filemanageroptions);
 $user->imagefile = $draftitemid;
 // Create form.
-$userform = new user_edit_form(null, array(
+$userform = new user_edit_form(new moodle_url($PAGE->url, array('returnto' => $returnto)), array(
     'editoroptions' => $editoroptions,
     'filemanageroptions' => $filemanageroptions,
-    'userid' => $user->id));
-if (empty($user->country)) {
-    // MDL-16308 - we must unset the value here so $CFG->country can be used as default one.
-    unset($user->country);
-}
-$userform->set_data($user);
+    'user' => $user));
 
 $emailchanged = false;
 
 if ($usernew = $userform->get_data()) {
+
+    // Deciding where to send the user back in most cases.
+    if ($returnto === 'profile') {
+        if ($course->id != SITEID) {
+            $returnurl = new moodle_url('/user/view.php', array('id' => $user->id, 'course' => $course->id));
+        } else {
+            $returnurl = new moodle_url('/user/profile.php', array('id' => $user->id));
+        }
+    } else {
+        $returnurl = new moodle_url('/user/preferences.php', array('userid' => $user->id));
+    }
 
     $emailchangedhtml = '';
 
@@ -199,7 +206,7 @@ if ($usernew = $userform->get_data()) {
             $a->oldemail = $usernew->email = $user->email;
 
             $emailchangedhtml = $OUTPUT->box(get_string('auth_changingemailaddress', 'auth', $a), 'generalbox', 'notice');
-            $emailchangedhtml .= $OUTPUT->continue_button("$CFG->wwwroot/user/view.php?id=$user->id&amp;course=$course->id");
+            $emailchangedhtml .= $OUTPUT->continue_button($returnurl);
             $emailchanged = true;
         }
     }
@@ -209,7 +216,7 @@ if ($usernew = $userform->get_data()) {
     $usernew->timemodified = time();
 
     // Description editor element may not exist!
-    if (isset($usernew->description_editor)) {
+    if (isset($usernew->description_editor) && isset($usernew->description_editor['format'])) {
         $usernew = file_postupdate_standard_editor($usernew, 'description', $editoroptions, $personalcontext, 'user', 'profile', 0);
     }
 
@@ -220,7 +227,7 @@ if ($usernew = $userform->get_data()) {
     }
 
     // Update user with new profile data.
-    user_update_user($usernew, false);
+    user_update_user($usernew, false, false);
 
     // Update preferences.
     useredit_update_user_preference($usernew);
@@ -243,6 +250,9 @@ if ($usernew = $userform->get_data()) {
 
     // Save custom profile fields data.
     profile_save_data($usernew);
+
+    // Trigger event.
+    \core\event\user_updated::create_from_userid($user->id)->trigger();
 
     // If email was changed and confirmation is required, send confirmation email now to the new address.
     if ($emailchanged && $CFG->emailchangeconfirmation) {
@@ -286,7 +296,7 @@ if ($usernew = $userform->get_data()) {
     }
 
     if (!$emailchanged || !$CFG->emailchangeconfirmation) {
-        redirect("$CFG->wwwroot/user/view.php?id=$user->id&course=$course->id");
+        redirect($returnurl);
     }
 }
 
@@ -300,7 +310,7 @@ $strparticipants  = get_string('participants');
 $userfullname     = fullname($user, true);
 
 $PAGE->set_title("$course->shortname: $streditmyprofile");
-$PAGE->set_heading($course->fullname);
+$PAGE->set_heading($userfullname);
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading($userfullname);

@@ -71,7 +71,7 @@ class essay_attempt_viewed extends \core\event\base {
      */
     public function get_description() {
         return "The user with id '$this->userid' viewed the essay grade for the user with id '$this->relateduserid' for " .
-            "the attempt with id '$this->objectid' for the lesson activity with the course module id '$this->contextinstanceid'.";
+            "the attempt with id '$this->objectid' for the lesson activity with course module id '$this->contextinstanceid'.";
     }
 
     /**
@@ -82,5 +82,19 @@ class essay_attempt_viewed extends \core\event\base {
     protected function get_legacy_logdata() {
         return array($this->courseid, 'lesson', 'view grade', 'essay.php?id=' . $this->contextinstanceid . '&mode=grade&attemptid='
             . $this->objectid, get_string('manualgrading', 'lesson'), $this->contextinstanceid);
+    }
+
+    /**
+     * Custom validation.
+     *
+     * @throws \coding_exception
+     * @return void
+     */
+    protected function validate_data() {
+        parent::validate_data();
+
+        if (!isset($this->relateduserid)) {
+            throw new \coding_exception('The \'relateduserid\' must be set.');
+        }
     }
 }

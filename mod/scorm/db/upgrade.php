@@ -276,6 +276,48 @@ function xmldb_scorm_upgrade($oldversion) {
         upgrade_mod_savepoint(true, 2014040200, 'scorm');
     }
 
+    // Moodle v2.7.0 release upgrade line.
+    // Put any upgrade step following this.
+
+    if ($oldversion < 2014072500) {
+
+        // Define field autocommit to be added to scorm.
+        $table = new xmldb_table('scorm');
+        $field = new xmldb_field('autocommit', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'displayactivityname');
+
+        // Conditionally launch add field autocommit.
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // Scorm savepoint reached.
+        upgrade_mod_savepoint(true, 2014072500, 'scorm');
+    }
+
+    // Moodle v2.8.0 release upgrade line.
+    // Put any upgrade step following this.
+
+    if ($oldversion < 2015031800) {
+
+        // Check to see if this site has any AICC packages - if so set the aiccuserid to pass the username
+        // so that the data remains consistent with existing packages.
+        $alreadyset = $DB->record_exists('config_plugins', array('plugin' => 'scorm', 'name' => 'aiccuserid'));
+        if (!$alreadyset) {
+            $hasaicc = $DB->record_exists('scorm', array('version' => 'AICC'));
+            if ($hasaicc) {
+                set_config('aiccuserid', 0, 'scorm');
+            } else {
+                // We set the config value to hide this from upgrades as most users will not know what AICC is anyway.
+                set_config('aiccuserid', 1, 'scorm');
+            }
+        }
+        // Scorm savepoint reached.
+        upgrade_mod_savepoint(true, 2015031800, 'scorm');
+    }
+
+    // Moodle v2.9.0 release upgrade line.
+    // Put any upgrade step following this.
+
     return true;
 }
 

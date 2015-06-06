@@ -408,13 +408,16 @@ define('FEATURE_COMPLETION_HAS_RULES', 'completion_has_rules');
 
 /** True if module has no 'view' page (like label) */
 define('FEATURE_NO_VIEW_LINK', 'viewlink');
-/** True if module supports outcomes */
+/** True (which is default) if the module wants support for setting the ID number for grade calculation purposes. */
 define('FEATURE_IDNUMBER', 'idnumber');
 /** True if module supports groups */
 define('FEATURE_GROUPS', 'groups');
 /** True if module supports groupings */
 define('FEATURE_GROUPINGS', 'groupings');
-/** True if module supports groupmembersonly */
+/**
+ * True if module supports groupmembersonly (which no longer exists)
+ * @deprecated Since Moodle 2.8
+ */
 define('FEATURE_GROUPMEMBERSONLY', 'groupmembersonly');
 
 /** Type of module */
@@ -619,9 +622,6 @@ function required_param_array($parname, $type) {
 function optional_param($parname, $default, $type) {
     if (func_num_args() != 3 or empty($parname) or empty($type)) {
         throw new coding_exception('optional_param requires $parname, $default + $type to be specified (parameter: '.$parname.')');
-    }
-    if (!isset($default)) {
-        $default = null;
     }
 
     // POST has precedence.
@@ -1029,10 +1029,16 @@ function clean_param($param, $type) {
             // Allow http absolute, root relative and relative URLs within wwwroot.
             $param = clean_param($param, PARAM_URL);
             if (!empty($param)) {
+
+                // Simulate the HTTPS version of the site.
+                $httpswwwroot = str_replace('http://', 'https://', $CFG->wwwroot);
+
                 if (preg_match(':^/:', $param)) {
                     // Root-relative, ok!
-                } else if (preg_match('/^'.preg_quote($CFG->wwwroot, '/').'/i', $param)) {
+                } else if (preg_match('/^' . preg_quote($CFG->wwwroot, '/') . '/i', $param)) {
                     // Absolute, and matches our wwwroot.
+                } else if (!empty($CFG->loginhttps) && preg_match('/^' . preg_quote($httpswwwroot, '/') . '/i', $param)) {
+                    // Absolute, and matches our httpswwwroot.
                 } else {
                     // Relative - let's make sure there are no tricks.
                     if (validateUrlSyntax('/' . $param, 's-u-P-a-p-f+q?r?')) {
@@ -1099,7 +1105,7 @@ function clean_param($param, $type) {
             // Remove some nasties.
             $param = preg_replace('~[[:cntrl:]]|[<>`]~u', '', $param);
             // Convert many whitespace chars into one.
-            $param = preg_replace('/\s+/', ' ', $param);
+            $param = preg_replace('/\s+/u', ' ', $param);
             $param = core_text::substr(trim($param), 0, TAG_MAX_LENGTH);
             return $param;
 
@@ -1168,10 +1174,11 @@ function clean_param($param, $type) {
 
         case PARAM_USERNAME:
             $param = fix_utf8($param);
-            $param = str_replace(" " , "", $param);
+            $param = trim($param);
             // Convert uppercase to lowercase MDL-16919.
             $param = core_text::strtolower($param);
             if (empty($CFG->extendedusernamechars)) {
+                $param = str_replace(" " , "", $param);
                 // Regular expression, eliminate all chars EXCEPT:
                 // alphanum, dash (-), underscore (_), at sign (@) and period (.) characters.
                 $param = preg_replace('/[^-\.@_a-z0-9]/', '', $param);
@@ -1329,6 +1336,8 @@ function html_is_blank($string) {
  *
  * A NULL value will delete the entry.
  *
+ * NOTE: this function is called from lib/db/upgrade.php
+ *
  * @param string $name the key to set
  * @param string $value the value to set (without magic quotes)
  * @param string $plugin (optional) the plugin scope, default null
@@ -1398,6 +1407,8 @@ function set_config($name, $value, $plugin=null) {
  *
  * If called with 2 parameters it will return a string single
  * value or false if the value is not found.
+ *
+ * NOTE: this function is called from lib/db/upgrade.php
  *
  * @static string|false $siteidentifier The site identifier is not cached. We use this static cache so
  *     that we need only fetch it once per request.
@@ -1484,6 +1495,8 @@ function get_config($plugin, $name = null) {
 
 /**
  * Removes a key from global configuration.
+ *
+ * NOTE: this function is called from lib/db/upgrade.php
  *
  * @param string $name the key to set
  * @param string $plugin (optional) the plugin scope
@@ -2026,23 +2039,15 @@ function get_user_preferences($name = null, $default = null, $user = null) {
  * @return int GMT timestamp
  */
 function make_timestamp($year, $month=1, $day=1, $hour=0, $minute=0, $second=0, $timezone=99, $applydst=true) {
+    $date = new DateTime('now', core_date::get_user_timezone_object($timezone));
+    $date->setDate((int)$year, (int)$month, (int)$day);
+    $date->setTime((int)$hour, (int)$minute, (int)$second);
 
-    // Save input timezone, required for dst offset check.
-    $passedtimezone = $timezone;
+    $time = $date->getTimestamp();
 
-    $timezone = get_user_timezone_offset($timezone);
-
-    if (abs($timezone) > 13) {
-        // Server time.
-        $time = mktime((int)$hour, (int)$minute, (int)$second, (int)$month, (int)$day, (int)$year);
-    } else {
-        $time = gmmktime((int)$hour, (int)$minute, (int)$second, (int)$month, (int)$day, (int)$year);
-        $time = usertime($time, $timezone);
-
-        // Apply dst for string timezones or if 99 then try dst offset with user's default timezone.
-        if ($applydst && ((99 == $passedtimezone) || !is_numeric($passedtimezone))) {
-            $time -= dst_offset_on($time, $passedtimezone);
-        }
+    // Moodle BC DST stuff.
+    if (!$applydst) {
+        $time += dst_offset_on($time, $timezone);
     }
 
     return $time;
@@ -2166,13 +2171,9 @@ function userdate($date, $format = '', $timezone = 99, $fixday = true, $fixhour 
  * If we are running under Windows convert to Windows encoding and then back to UTF-8
  * (because it's impossible to specify UTF-8 to fetch locale info in Win32).
  *
- * This function does not do any calculation regarding the user preferences and should
- * therefore receive the final date timestamp, format and timezone. Timezone being only used
- * to differentiate the use of server time or not (strftime() against gmstrftime()).
- *
- * @param int $date the timestamp.
+ * @param int $date the timestamp - since Moodle 2.9 this is a real UTC timestamp
  * @param string $format strftime format.
- * @param int|float $tz the numerical timezone, typically returned by {@link get_user_timezone_offset()}.
+ * @param int|float|string $tz the user timezone
  * @return string the formatted date/time.
  * @since Moodle 2.3.3
  */
@@ -2186,23 +2187,18 @@ function date_format_string($date, $format, $tz = 99) {
         $localewincharset = $calendartype->locale_win_charset();
     }
 
-    if (abs($tz) > 13) {
-        if ($localewincharset) {
-            $format = core_text::convert($format, 'utf-8', $localewincharset);
-            $datestring = strftime($format, $date);
-            $datestring = core_text::convert($datestring, $localewincharset, 'utf-8');
-        } else {
-            $datestring = strftime($format, $date);
-        }
-    } else {
-        if ($localewincharset) {
-            $format = core_text::convert($format, 'utf-8', $localewincharset);
-            $datestring = gmstrftime($format, $date);
-            $datestring = core_text::convert($datestring, $localewincharset, 'utf-8');
-        } else {
-            $datestring = gmstrftime($format, $date);
-        }
+    if ($localewincharset) {
+        $format = core_text::convert($format, 'utf-8', $localewincharset);
     }
+
+    date_default_timezone_set(core_date::get_user_timezone($tz));
+    $datestring = strftime($format, $date);
+    core_date::set_default_server_timezone();
+
+    if ($localewincharset) {
+        $datestring = core_text::convert($datestring, $localewincharset, 'utf-8');
+    }
+
     return $datestring;
 }
 
@@ -2212,81 +2208,37 @@ function date_format_string($date, $format, $tz = 99) {
  *
  * @package core
  * @category time
- * @uses HOURSECS
  * @param int $time Timestamp in GMT
- * @param float|int|string $timezone offset's time with timezone, if float and not 99, then no
- *        dst offset is applied {@link http://docs.moodle.org/dev/Time_API#Timezone}
+ * @param float|int|string $timezone user timezone
  * @return array An array that represents the date in user time
  */
 function usergetdate($time, $timezone=99) {
+    date_default_timezone_set(core_date::get_user_timezone($timezone));
+    $result = getdate($time);
+    core_date::set_default_server_timezone();
 
-    // Save input timezone, required for dst offset check.
-    $passedtimezone = $timezone;
-
-    $timezone = get_user_timezone_offset($timezone);
-
-    if (abs($timezone) > 13) {
-        // Server time.
-        return getdate($time);
-    }
-
-    // Add daylight saving offset for string timezones only, as we can't get dst for
-    // float values. if timezone is 99 (user default timezone), then try update dst.
-    if ($passedtimezone == 99 || !is_numeric($passedtimezone)) {
-        $time += dst_offset_on($time, $passedtimezone);
-    }
-
-    $time += intval((float)$timezone * HOURSECS);
-
-    $datestring = gmstrftime('%B_%A_%j_%Y_%m_%w_%d_%H_%M_%S', $time);
-
-    // Be careful to ensure the returned array matches that produced by getdate() above.
-    list(
-        $getdate['month'],
-        $getdate['weekday'],
-        $getdate['yday'],
-        $getdate['year'],
-        $getdate['mon'],
-        $getdate['wday'],
-        $getdate['mday'],
-        $getdate['hours'],
-        $getdate['minutes'],
-        $getdate['seconds']
-    ) = explode('_', $datestring);
-
-    // Set correct datatype to match with getdate().
-    $getdate['seconds'] = (int)$getdate['seconds'];
-    $getdate['yday'] = (int)$getdate['yday'] - 1; // The function gmstrftime returns 0 through 365.
-    $getdate['year'] = (int)$getdate['year'];
-    $getdate['mon'] = (int)$getdate['mon'];
-    $getdate['wday'] = (int)$getdate['wday'];
-    $getdate['mday'] = (int)$getdate['mday'];
-    $getdate['hours'] = (int)$getdate['hours'];
-    $getdate['minutes'] = (int)$getdate['minutes'];
-    return $getdate;
+    return $result;
 }
 
 /**
  * Given a GMT timestamp (seconds since epoch), offsets it by
  * the timezone.  eg 3pm in India is 3pm GMT - 7 * 3600 seconds
  *
+ * NOTE: this function does not include DST properly,
+ *       you should use the PHP date stuff instead!
+ *
  * @package core
  * @category time
- * @uses HOURSECS
  * @param int $date Timestamp in GMT
- * @param float|int|string $timezone timezone to calculate GMT time offset before
- *        calculating user time, 99 is default user timezone
- *        {@link http://docs.moodle.org/dev/Time_API#Timezone}
+ * @param float|int|string $timezone user timezone
  * @return int
  */
 function usertime($date, $timezone=99) {
+    $userdate = new DateTime('@' . $date);
+    $userdate->setTimezone(core_date::get_user_timezone_object($timezone));
+    $dst = dst_offset_on($date, $timezone);
 
-    $timezone = get_user_timezone_offset($timezone);
-
-    if (abs($timezone) > 13) {
-        return $date;
-    }
-    return $date - (int)($timezone * HOURSECS);
+    return $date - $userdate->getOffset() + $dst;
 }
 
 /**
@@ -2296,9 +2248,7 @@ function usertime($date, $timezone=99) {
  * @package core
  * @category time
  * @param int $date Timestamp in GMT
- * @param float|int|string $timezone timezone to calculate GMT time offset before
- *        calculating user midnight time, 99 is default user timezone
- *        {@link http://docs.moodle.org/dev/Time_API#Timezone}
+ * @param float|int|string $timezone user timezone
  * @return int Returns a GMT timestamp
  */
 function usergetmidnight($date, $timezone=99) {
@@ -2315,86 +2265,12 @@ function usergetmidnight($date, $timezone=99) {
  *
  * @package core
  * @category time
- * @param float|int|string $timezone timezone to calculate GMT time offset before
- *        calculating user timezone, 99 is default user timezone
- *        {@link http://docs.moodle.org/dev/Time_API#Timezone}
+ * @param float|int|string $timezone user timezone
  * @return string
  */
 function usertimezone($timezone=99) {
-
-    $tz = get_user_timezone($timezone);
-
-    if (!is_float($tz)) {
-        return $tz;
-    }
-
-    if (abs($tz) > 13) {
-        // Server time.
-        return get_string('serverlocaltime');
-    }
-
-    if ($tz == intval($tz)) {
-        // Don't show .0 for whole hours.
-        $tz = intval($tz);
-    }
-
-    if ($tz == 0) {
-        return 'UTC';
-    } else if ($tz > 0) {
-        return 'UTC+'.$tz;
-    } else {
-        return 'UTC'.$tz;
-    }
-
-}
-
-/**
- * Returns a float which represents the user's timezone difference from GMT in hours
- * Checks various settings and picks the most dominant of those which have a value
- *
- * @package core
- * @category time
- * @param float|int|string $tz timezone to calculate GMT time offset for user,
- *        99 is default user timezone
- *        {@link http://docs.moodle.org/dev/Time_API#Timezone}
- * @return float
- */
-function get_user_timezone_offset($tz = 99) {
-    $tz = get_user_timezone($tz);
-
-    if (is_float($tz)) {
-        return $tz;
-    } else {
-        $tzrecord = get_timezone_record($tz);
-        if (empty($tzrecord)) {
-            return 99.0;
-        }
-        return (float)$tzrecord->gmtoff / HOURMINS;
-    }
-}
-
-/**
- * Returns an int which represents the systems's timezone difference from GMT in seconds
- *
- * @package core
- * @category time
- * @param float|int|string $tz timezone for which offset is required.
- *        {@link http://docs.moodle.org/dev/Time_API#Timezone}
- * @return int|bool if found, false is timezone 99 or error
- */
-function get_timezone_offset($tz) {
-    if ($tz == 99) {
-        return false;
-    }
-
-    if (is_numeric($tz)) {
-        return intval($tz * 60*60);
-    }
-
-    if (!$tzrecord = get_timezone_record($tz)) {
-        return false;
-    }
-    return intval($tzrecord->gmtoff * 60);
+    $tz = core_date::get_user_timezone($timezone);
+    return core_date::get_localised_timezone($tz);
 }
 
 /**
@@ -2430,246 +2306,26 @@ function get_user_timezone($tz = 99) {
 }
 
 /**
- * Returns cached timezone record for given $timezonename
- *
- * @package core
- * @param string $timezonename name of the timezone
- * @return stdClass|bool timezonerecord or false
- */
-function get_timezone_record($timezonename) {
-    global $DB;
-    static $cache = null;
-
-    if ($cache === null) {
-        $cache = array();
-    }
-
-    if (isset($cache[$timezonename])) {
-        return $cache[$timezonename];
-    }
-
-    return $cache[$timezonename] = $DB->get_record_sql('SELECT * FROM {timezone}
-                                                        WHERE name = ? ORDER BY year DESC', array($timezonename), IGNORE_MULTIPLE);
-}
-
-/**
- * Build and store the users Daylight Saving Time (DST) table
- *
- * @package core
- * @param int $fromyear Start year for the table, defaults to 1971
- * @param int $toyear End year for the table, defaults to 2035
- * @param int|float|string $strtimezone timezone to check if dst should be applied.
- * @return bool
- */
-function calculate_user_dst_table($fromyear = null, $toyear = null, $strtimezone = null) {
-    global $SESSION, $DB;
-
-    $usertz = get_user_timezone($strtimezone);
-
-    if (is_float($usertz)) {
-        // Trivial timezone, no DST.
-        return false;
-    }
-
-    if (!empty($SESSION->dst_offsettz) && $SESSION->dst_offsettz != $usertz) {
-        // We have pre-calculated values, but the user's effective TZ has changed in the meantime, so reset.
-        unset($SESSION->dst_offsets);
-        unset($SESSION->dst_range);
-    }
-
-    if (!empty($SESSION->dst_offsets) && empty($fromyear) && empty($toyear)) {
-        // Repeat calls which do not request specific year ranges stop here, we have already calculated the table.
-        // This will be the return path most of the time, pretty light computationally.
-        return true;
-    }
-
-    // Reaching here means we either need to extend our table or create it from scratch.
-
-    // Remember which TZ we calculated these changes for.
-    $SESSION->dst_offsettz = $usertz;
-
-    if (empty($SESSION->dst_offsets)) {
-        // If we 're creating from scratch, put the two guard elements in there.
-        $SESSION->dst_offsets = array(1 => null, 0 => null);
-    }
-    if (empty($SESSION->dst_range)) {
-        // If creating from scratch.
-        $from = max((empty($fromyear) ? intval(date('Y')) - 3 : $fromyear), 1971);
-        $to   = min((empty($toyear)   ? intval(date('Y')) + 3 : $toyear),   2035);
-
-        // Fill in the array with the extra years we need to process.
-        $yearstoprocess = array();
-        for ($i = $from; $i <= $to; ++$i) {
-            $yearstoprocess[] = $i;
-        }
-
-        // Take note of which years we have processed for future calls.
-        $SESSION->dst_range = array($from, $to);
-    } else {
-        // If needing to extend the table, do the same.
-        $yearstoprocess = array();
-
-        $from = max((empty($fromyear) ? $SESSION->dst_range[0] : $fromyear), 1971);
-        $to   = min((empty($toyear)   ? $SESSION->dst_range[1] : $toyear),   2035);
-
-        if ($from < $SESSION->dst_range[0]) {
-            // Take note of which years we need to process and then note that we have processed them for future calls.
-            for ($i = $from; $i < $SESSION->dst_range[0]; ++$i) {
-                $yearstoprocess[] = $i;
-            }
-            $SESSION->dst_range[0] = $from;
-        }
-        if ($to > $SESSION->dst_range[1]) {
-            // Take note of which years we need to process and then note that we have processed them for future calls.
-            for ($i = $SESSION->dst_range[1] + 1; $i <= $to; ++$i) {
-                $yearstoprocess[] = $i;
-            }
-            $SESSION->dst_range[1] = $to;
-        }
-    }
-
-    if (empty($yearstoprocess)) {
-        // This means that there was a call requesting a SMALLER range than we have already calculated.
-        return true;
-    }
-
-    // From now on, we know that the array has at least the two guard elements, and $yearstoprocess has the years we need
-    // Also, the array is sorted in descending timestamp order!
-
-    // Get DB data.
-
-    static $presetscache = array();
-    if (!isset($presetscache[$usertz])) {
-        $presetscache[$usertz] = $DB->get_records('timezone', array('name' => $usertz),
-            'year DESC', 'year, gmtoff, dstoff, dst_month, dst_startday, dst_weekday, dst_skipweeks, dst_time, std_month, '.
-            'std_startday, std_weekday, std_skipweeks, std_time');
-    }
-    if (empty($presetscache[$usertz])) {
-        return false;
-    }
-
-    // Remove ending guard (first element of the array).
-    reset($SESSION->dst_offsets);
-    unset($SESSION->dst_offsets[key($SESSION->dst_offsets)]);
-
-    // Add all required change timestamps.
-    foreach ($yearstoprocess as $y) {
-        // Find the record which is in effect for the year $y.
-        foreach ($presetscache[$usertz] as $year => $preset) {
-            if ($year <= $y) {
-                break;
-            }
-        }
-
-        $changes = dst_changes_for_year($y, $preset);
-
-        if ($changes === null) {
-            continue;
-        }
-        if ($changes['dst'] != 0) {
-            $SESSION->dst_offsets[$changes['dst']] = $preset->dstoff * MINSECS;
-        }
-        if ($changes['std'] != 0) {
-            $SESSION->dst_offsets[$changes['std']] = 0;
-        }
-    }
-
-    // Put in a guard element at the top.
-    $maxtimestamp = max(array_keys($SESSION->dst_offsets));
-    $SESSION->dst_offsets[($maxtimestamp + DAYSECS)] = null; // DAYSECS is arbitrary, any "small" number will do.
-
-    // Sort again.
-    krsort($SESSION->dst_offsets);
-
-    return true;
-}
-
-/**
- * Calculates the required DST change and returns a Timestamp Array
- *
- * @package core
- * @category time
- * @uses HOURSECS
- * @uses MINSECS
- * @param int|string $year Int or String Year to focus on
- * @param object $timezone Instatiated Timezone object
- * @return array|null Array dst => xx, 0 => xx, std => yy, 1 => yy or null
- */
-function dst_changes_for_year($year, $timezone) {
-
-    if ($timezone->dst_startday == 0 && $timezone->dst_weekday == 0 &&
-        $timezone->std_startday == 0 && $timezone->std_weekday == 0) {
-        return null;
-    }
-
-    $monthdaydst = find_day_in_month($timezone->dst_startday, $timezone->dst_weekday, $timezone->dst_month, $year);
-    $monthdaystd = find_day_in_month($timezone->std_startday, $timezone->std_weekday, $timezone->std_month, $year);
-
-    list($dsthour, $dstmin) = explode(':', $timezone->dst_time);
-    list($stdhour, $stdmin) = explode(':', $timezone->std_time);
-
-    $timedst = make_timestamp($year, $timezone->dst_month, $monthdaydst, 0, 0, 0, 99, false);
-    $timestd = make_timestamp($year, $timezone->std_month, $monthdaystd, 0, 0, 0, 99, false);
-
-    // Instead of putting hour and minute in make_timestamp(), we add them afterwards.
-    // This has the advantage of being able to have negative values for hour, i.e. for timezones
-    // where GMT time would be in the PREVIOUS day than the local one on which DST changes.
-
-    $timedst += $dsthour * HOURSECS + $dstmin * MINSECS;
-    $timestd += $stdhour * HOURSECS + $stdmin * MINSECS;
-
-    return array('dst' => $timedst, 0 => $timedst, 'std' => $timestd, 1 => $timestd);
-}
-
-/**
  * Calculates the Daylight Saving Offset for a given date/time (timestamp)
  * - Note: Daylight saving only works for string timezones and not for float.
  *
  * @package core
  * @category time
  * @param int $time must NOT be compensated at all, it has to be a pure timestamp
- * @param int|float|string $strtimezone timezone for which offset is expected, if 99 or null
- *        then user's default timezone is used. {@link http://docs.moodle.org/dev/Time_API#Timezone}
+ * @param int|float|string $strtimezone user timezone
  * @return int
  */
 function dst_offset_on($time, $strtimezone = null) {
-    global $SESSION;
-
-    if (!calculate_user_dst_table(null, null, $strtimezone) || empty($SESSION->dst_offsets)) {
-        return 0;
-    }
-
-    reset($SESSION->dst_offsets);
-    while (list($from, $offset) = each($SESSION->dst_offsets)) {
-        if ($from <= $time) {
-            break;
+    $tz = core_date::get_user_timezone($strtimezone);
+    $date = new DateTime('@' . $time);
+    $date->setTimezone(new DateTimeZone($tz));
+    if ($date->format('I') == '1') {
+        if ($tz === 'Australia/Lord_Howe') {
+            return 1800;
         }
+        return 3600;
     }
-
-    // This is the normal return path.
-    if ($offset !== null) {
-        return $offset;
-    }
-
-    // Reaching this point means we haven't calculated far enough, do it now:
-    // Calculate extra DST changes if needed and recurse. The recursion always
-    // moves toward the stopping condition, so will always end.
-
-    if ($from == 0) {
-        // We need a year smaller than $SESSION->dst_range[0].
-        if ($SESSION->dst_range[0] == 1971) {
-            return 0;
-        }
-        calculate_user_dst_table($SESSION->dst_range[0] - 5, null, $strtimezone);
-        return dst_offset_on($time, $strtimezone);
-    } else {
-        // We need a year larger than $SESSION->dst_range[1].
-        if ($SESSION->dst_range[1] == 2035) {
-            return 0;
-        }
-        calculate_user_dst_table(null, $SESSION->dst_range[1] + 5, $strtimezone);
-        return dst_offset_on($time, $strtimezone);
-    }
+    return 0;
 }
 
 /**
@@ -2843,10 +2499,6 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
                 $modinfo = get_fast_modinfo($course);
                 $cm = $modinfo->get_cm($cm->id);
             }
-            $PAGE->set_cm($cm, $course); // Set's up global $COURSE.
-            $PAGE->set_pagelayout('incourse');
-        } else {
-            $PAGE->set_course($course); // Set's up global $COURSE.
         }
     } else {
         // Do not touch global $COURSE via $PAGE->set_course(),
@@ -2896,8 +2548,22 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
             if (!empty($_SERVER['HTTP_REFERER'])) {
                 $SESSION->fromurl  = $_SERVER['HTTP_REFERER'];
             }
-            redirect(get_login_url());
-            exit; // Never reached.
+
+            // Give auth plugins an opportunity to authenticate or redirect to an external login page
+            $authsequence = get_enabled_auth_plugins(true); // auths, in sequence
+            foreach($authsequence as $authname) {
+                $authplugin = get_auth_plugin($authname);
+                $authplugin->pre_loginpage_hook();
+                if (isloggedin()) {
+                    break;
+                }
+            }
+
+            // If we're still not logged in then go to the login page
+            if (!isloggedin()) {
+                redirect(get_login_url());
+                exit; // Never reached.
+            }
         }
     }
 
@@ -2950,6 +2616,13 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
 
     // Do not bother admins with any formalities.
     if (is_siteadmin()) {
+        // Set the global $COURSE.
+        if ($cm) {
+            $PAGE->set_cm($cm, $course);
+            $PAGE->set_pagelayout('incourse');
+        } else if (!empty($courseorid)) {
+            $PAGE->set_course($course);
+        }
         // Set accesstime or the user will appear offline which messes up messaging.
         user_accesstime_log($course->id);
         return;
@@ -3007,6 +2680,7 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
                 if ($preventredirect) {
                     throw new require_login_exception('Course is hidden');
                 }
+                $PAGE->set_context(null);
                 // We need to override the navigation URL as the course won't have been added to the navigation and thus
                 // the navigation will mess up when trying to find it.
                 navigation_node::override_active_url(new moodle_url('/'));
@@ -3027,6 +2701,7 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
                 if ($preventredirect) {
                     throw new require_login_exception('Invalid course login-as access');
                 }
+                $PAGE->set_context(null);
                 echo $OUTPUT->header();
                 notice(get_string('studentnotallowed', '', fullname($USER, true)), $CFG->wwwroot .'/');
             }
@@ -3128,7 +2803,16 @@ function require_login($courseorid = null, $autologinguest = true, $cm = null, $
         }
     }
 
-    // Check visibility of activity to current user; includes visible flag, groupmembersonly, conditional availability, etc.
+    // Set the global $COURSE.
+    // TODO MDL-49434: setting current course/cm should be after the check $cm->uservisible .
+    if ($cm) {
+        $PAGE->set_cm($cm, $course);
+        $PAGE->set_pagelayout('incourse');
+    } else if (!empty($courseorid)) {
+        $PAGE->set_course($course);
+    }
+
+    // Check visibility of activity to current user; includes visible flag, conditional availability, etc.
     if ($cm && !$cm->uservisible) {
         if ($preventredirect) {
             throw new require_login_exception('Activity is hidden');
@@ -3162,10 +2846,11 @@ function require_logout() {
     }
 
     // Execute hooks before action.
+    $authplugins = array();
     $authsequence = get_enabled_auth_plugins();
     foreach ($authsequence as $authname) {
-        $authplugin = get_auth_plugin($authname);
-        $authplugin->prelogout_hook();
+        $authplugins[$authname] = get_auth_plugin($authname);
+        $authplugins[$authname]->prelogout_hook();
     }
 
     // Store info that gets removed during logout.
@@ -3181,11 +2866,19 @@ function require_logout() {
         $event->add_record_snapshot('sessions', $session);
     }
 
+    // Clone of $USER object to be used by auth plugins.
+    $user = fullclone($USER);
+
     // Delete session record and drop $_SESSION content.
     \core\session\manager::terminate_current();
 
     // Trigger event AFTER action.
     $event->trigger();
+
+    // Hook to execute auth plugins redirection after event trigger.
+    foreach ($authplugins as $authplugin) {
+        $authplugin->postlogout_hook($user);
+    }
 }
 
 /**
@@ -3235,37 +2928,28 @@ function require_course_login($courseorid, $autologinguest = true, $cm = null, $
 
     } else if ($issite) {
         // Login for SITE not required.
-        if ($cm and empty($cm->visible)) {
-            // Hidden activities are not accessible without login.
-            require_login($courseorid, $autologinguest, $cm, $setwantsurltome, $preventredirect);
-        } else if ($cm and !empty($CFG->enablegroupmembersonly) and $cm->groupmembersonly) {
-            // Not-logged-in users do not have any group membership.
-            require_login($courseorid, $autologinguest, $cm, $setwantsurltome, $preventredirect);
-        } else {
-            // We still need to instatiate PAGE vars properly so that things that rely on it like navigation function correctly.
-            if (!empty($courseorid)) {
-                if (is_object($courseorid)) {
-                    $course = $courseorid;
-                } else {
-                    $course = clone($SITE);
-                }
-                if ($cm) {
-                    if ($cm->course != $course->id) {
-                        throw new coding_exception('course and cm parameters in require_course_login() call do not match!!');
-                    }
-                    $PAGE->set_cm($cm, $course);
-                    $PAGE->set_pagelayout('incourse');
-                } else {
-                    $PAGE->set_course($course);
-                }
+        // We still need to instatiate PAGE vars properly so that things that rely on it like navigation function correctly.
+        if (!empty($courseorid)) {
+            if (is_object($courseorid)) {
+                $course = $courseorid;
             } else {
-                // If $PAGE->course, and hence $PAGE->context, have not already been set up properly, set them up now.
-                $PAGE->set_course($PAGE->course);
+                $course = clone $SITE;
             }
-            // TODO: verify conditional activities here.
-            user_accesstime_log(SITEID);
-            return;
+            if ($cm) {
+                if ($cm->course != $course->id) {
+                    throw new coding_exception('course and cm parameters in require_course_login() call do not match!!');
+                }
+                $PAGE->set_cm($cm, $course);
+                $PAGE->set_pagelayout('incourse');
+            } else {
+                $PAGE->set_course($course);
+            }
+        } else {
+            // If $PAGE->course, and hence $PAGE->context, have not already been set up properly, set them up now.
+            $PAGE->set_course($PAGE->course);
         }
+        user_accesstime_log(SITEID);
+        return;
 
     } else {
         // Course login always required.
@@ -3593,9 +3277,20 @@ function fullname($user, $override=false) {
     if (isset($CFG->fullnamedisplay)) {
         $template = $CFG->fullnamedisplay;
     }
-    // If the template is empty, or set to language, or $override is set, return the language string.
-    if (empty($template) || $template == 'language' || $override) {
+    // If the template is empty, or set to language, return the language string.
+    if ((empty($template) || $template == 'language') && !$override) {
         return get_string('fullnamedisplay', null, $user);
+    }
+
+    // Check to see if we are displaying according to the alternative full name format.
+    if ($override) {
+        if (empty($CFG->alternativefullnameformat) || $CFG->alternativefullnameformat == 'language') {
+            // Default to show just the user names according to the fullnamedisplay string.
+            return get_string('fullnamedisplay', null, $user);
+        } else {
+            // If the override is true, then change the template to use the complete name.
+            $template = $CFG->alternativefullnameformat;
+        }
     }
 
     $requirednames = array();
@@ -3651,9 +3346,12 @@ function fullname($user, $override=false) {
  * @param string $tableprefix table query prefix to use in front of each field.
  * @param string $prefix prefix added to the name fields e.g. authorfirstname.
  * @param string $fieldprefix sql field prefix e.g. id AS userid.
+ * @param bool $order moves firstname and lastname to the top of the array / start of the string.
  * @return array|string All name fields.
  */
-function get_all_user_name_fields($returnsql = false, $tableprefix = null, $prefix = null, $fieldprefix = null) {
+function get_all_user_name_fields($returnsql = false, $tableprefix = null, $prefix = null, $fieldprefix = null, $order = false) {
+    // This array is provided in this order because when called by fullname() (above) if firstname is before
+    // firstnamephonetic str_replace() will change the wrong placeholder.
     $alternatenames = array('firstnamephonetic' => 'firstnamephonetic',
                             'lastnamephonetic' => 'lastnamephonetic',
                             'middlename' => 'middlename',
@@ -3665,6 +3363,19 @@ function get_all_user_name_fields($returnsql = false, $tableprefix = null, $pref
     if ($prefix) {
         foreach ($alternatenames as $key => $altname) {
             $alternatenames[$key] = $prefix . $altname;
+        }
+    }
+
+    // If we want the end result to have firstname and lastname at the front / top of the result.
+    if ($order) {
+        // Move the last two elements (firstname, lastname) off the array and put them at the top.
+        for ($i = 0; $i < 2; $i++) {
+            // Get the last element.
+            $lastelement = end($alternatenames);
+            // Remove it from the array.
+            unset($alternatenames[$lastelement]);
+            // Put the element back on the top of the array.
+            $alternatenames = array_merge(array($lastelement => $lastelement), $alternatenames);
         }
     }
 
@@ -4029,7 +3740,7 @@ function create_user_record($username, $password, $auth = 'manual') {
     $newuser->timemodified = $newuser->timecreated;
     $newuser->mnethostid = $CFG->mnet_localhost_id;
 
-    $newuser->id = user_create_user($newuser, false);
+    $newuser->id = user_create_user($newuser, false, false);
 
     // Save user profile data.
     profile_save_data($newuser);
@@ -4040,6 +3751,9 @@ function create_user_record($username, $password, $auth = 'manual') {
     }
     // Set the password.
     update_internal_user_password($user, $password);
+
+    // Trigger event.
+    \core\event\user_created::create_from_userid($newuser->id)->trigger();
 
     return $user;
 }
@@ -4111,10 +3825,13 @@ function update_user_record_by_id($id) {
         if ($newuser) {
             $newuser['id'] = $oldinfo->id;
             $newuser['timemodified'] = time();
-            user_update_user((object) $newuser, false);
+            user_update_user((object) $newuser, false, false);
 
             // Save user profile data.
             profile_save_data((object) $newuser);
+
+            // Trigger event.
+            \core\event\user_updated::create_from_userid($newuser['id'])->trigger();
         }
     }
 
@@ -4240,6 +3957,9 @@ function delete_user(stdClass $user) {
     // Purge user extra profile info.
     $DB->delete_records('user_info_data', array('userid' => $user->id));
 
+    // Purge log of previous password hashes.
+    $DB->delete_records('user_password_history', array('userid' => $user->id));
+
     // Last course access not necessary either.
     $DB->delete_records('user_lastaccess', array('userid' => $user->id));
     // Remove all user tokens.
@@ -4273,7 +3993,8 @@ function delete_user(stdClass $user) {
     $updateuser->picture      = 0;
     $updateuser->timemodified = time();
 
-    user_update_user($updateuser, false);
+    // Don't trigger update event, as user is being deleted.
+    user_update_user($updateuser, false, false);
 
     // Now do a final accesslib cleanup - removes all role assignments in user context and context itself.
     context_helper::delete_instance(CONTEXT_USER, $user->id);
@@ -4410,20 +4131,6 @@ function authenticate_user_login($username, $password, $ignorelockout=false, &$f
             return false;
         }
 
-        // Do not try to authenticate non-existent accounts when user creation is disabled.
-        if (!empty($CFG->authpreventaccountcreation)) {
-            $failurereason = AUTH_LOGIN_NOUSER;
-
-            // Trigger login failed event.
-            $event = \core\event\user_login_failed::create(array('other' => array('username' => $username,
-                    'reason' => $failurereason)));
-            $event->trigger();
-
-            error_log('[client '.getremoteaddr()."]  $CFG->wwwroot  Unknown user, can not create new accounts:  $username  ".
-                    $_SERVER['HTTP_USER_AGENT']);
-            return false;
-        }
-
         // User does not exist.
         $auths = $authsenabled;
         $user = new stdClass();
@@ -4476,8 +4183,21 @@ function authenticate_user_login($username, $password, $ignorelockout=false, &$f
                 $user = update_user_record_by_id($user->id);
             }
         } else {
-            // Create account, we verified above that user creation is allowed.
-            $user = create_user_record($username, $password, $auth);
+            // The user is authenticated but user creation may be disabled.
+            if (!empty($CFG->authpreventaccountcreation)) {
+                $failurereason = AUTH_LOGIN_UNAUTHORISED;
+
+                // Trigger login failed event.
+                $event = \core\event\user_login_failed::create(array('other' => array('username' => $username,
+                        'reason' => $failurereason)));
+                $event->trigger();
+
+                error_log('[client '.getremoteaddr()."]  $CFG->wwwroot  Unknown user, can not create new accounts:  $username  ".
+                        $_SERVER['HTTP_USER_AGENT']);
+                return false;
+            } else {
+                $user = create_user_record($username, $password, $auth);
+            }
         }
 
         $authplugin->sync_roles($user);
@@ -4710,36 +4430,52 @@ function hash_internal_user_password($password, $fasthash = false) {
  *
  * @param stdClass $user User object (password property may be updated).
  * @param string $password Plain text password.
+ * @param bool $fasthash If true, use a low cost factor when generating the hash
+ *                       This is much faster to generate but makes the hash
+ *                       less secure. It is used when lots of hashes need to
+ *                       be generated quickly.
  * @return bool Always returns true.
  */
-function update_internal_user_password($user, $password) {
+function update_internal_user_password($user, $password, $fasthash = false) {
     global $CFG, $DB;
     require_once($CFG->libdir.'/password_compat/lib/password.php');
 
     // Figure out what the hashed password should be.
+    if (!isset($user->auth)) {
+        debugging('User record in update_internal_user_password() must include field auth',
+                DEBUG_DEVELOPER);
+        $user->auth = $DB->get_field('user', 'auth', array('id' => $user->id));
+    }
     $authplugin = get_auth_plugin($user->auth);
     if ($authplugin->prevent_local_passwords()) {
         $hashedpassword = AUTH_PASSWORD_NOT_CACHED;
     } else {
-        $hashedpassword = hash_internal_user_password($password);
+        $hashedpassword = hash_internal_user_password($password, $fasthash);
     }
 
-    // If verification fails then it means the password has changed.
-    $passwordchanged = !password_verify($password, $user->password);
-    $algorithmchanged = password_needs_rehash($user->password, PASSWORD_DEFAULT);
+    $algorithmchanged = false;
+
+    if ($hashedpassword === AUTH_PASSWORD_NOT_CACHED) {
+        // Password is not cached, update it if not set to AUTH_PASSWORD_NOT_CACHED.
+        $passwordchanged = ($user->password !== $hashedpassword);
+
+    } else if (isset($user->password)) {
+        // If verification fails then it means the password has changed.
+        $passwordchanged = !password_verify($password, $user->password);
+        $algorithmchanged = password_needs_rehash($user->password, PASSWORD_DEFAULT);
+    } else {
+        // While creating new user, password in unset in $user object, to avoid
+        // saving it with user_create()
+        $passwordchanged = true;
+    }
 
     if ($passwordchanged || $algorithmchanged) {
         $DB->set_field('user', 'password',  $hashedpassword, array('id' => $user->id));
         $user->password = $hashedpassword;
 
         // Trigger event.
-        $event = \core\event\user_updated::create(array(
-            'objectid' => $user->id,
-            'relateduserid' => $user->id,
-            'context' => context_user::instance($user->id)
-        ));
-        $event->add_record_snapshot('user', $user);
-        $event->trigger();
+        $user = $DB->get_record('user', array('id' => $user->id));
+        \core\event\user_password_updated::create_from_user($user)->trigger();
     }
 
     return true;
@@ -5166,7 +4902,6 @@ function remove_course_contents($courseid, $showfeedback = true, array $options 
     // This array stores the tables that need to be cleared, as
     // table_name => column_name that contains the course id.
     $tablestoclear = array(
-        'log' => 'course',               // Course logs (NOTE: this might be changed in the future).
         'backup_courses' => 'courseid',  // Scheduled backup stuff.
         'user_lastaccess' => 'courseid', // User access info.
     );
@@ -5313,11 +5048,6 @@ function reset_course_userdata($data) {
         $DB->execute($updatesql, array($data->timeshift, $data->courseid));
 
         $status[] = array('component' => $componentstr, 'item' => get_string('datechanged'), 'error' => false);
-    }
-
-    if (!empty($data->reset_logs)) {
-        $DB->delete_records('log', array('course' => $data->courseid));
-        $status[] = array('component' => $componentstr, 'item' => get_string('deletelogs'), 'error' => false);
     }
 
     if (!empty($data->reset_events)) {
@@ -5691,7 +5421,7 @@ function get_mailer($action='get') {
  * @param string $subject plain text subject line of the email
  * @param string $messagetext plain text version of the message
  * @param string $messagehtml complete html version of the message (optional)
- * @param string $attachment a file on the filesystem, relative to $CFG->dataroot
+ * @param string $attachment a file on the filesystem, either relative to $CFG->dataroot or a full path to a file in $CFG->tempdir
  * @param string $attachname the name of the file (extension indicates MIME)
  * @param bool $usetrueaddress determines whether $from email address should
  *          be sent out. Will be overruled by user profile setting for maildisplay
@@ -5744,21 +5474,20 @@ function email_to_user($user, $from, $subject, $messagetext, $messagehtml = '', 
 
     if (!validate_email($user->email)) {
         // We can not send emails to invalid addresses - it might create security issue or confuse the mailer.
-        $invalidemail = "User $user->id (".fullname($user).") email ($user->email) is invalid! Not sending.";
-        error_log($invalidemail);
-        if (CLI_SCRIPT) {
-            mtrace('Error: lib/moodlelib.php email_to_user(): '.$invalidemail);
-        }
+        debugging("email_to_user: User $user->id (".fullname($user).") email ($user->email) is invalid! Not sending.");
         return false;
     }
 
     if (over_bounce_threshold($user)) {
-        $bouncemsg = "User $user->id (".fullname($user).") is over bounce threshold! Not sending.";
-        error_log($bouncemsg);
-        if (CLI_SCRIPT) {
-            mtrace('Error: lib/moodlelib.php email_to_user(): '.$bouncemsg);
-        }
+        debugging("email_to_user: User $user->id (".fullname($user).") is over bounce threshold! Not sending.");
         return false;
+    }
+
+    // TLD .invalid  is specifically reserved for invalid domain names.
+    // For More information, see {@link http://tools.ietf.org/html/rfc2606#section-2}.
+    if (substr($user->email, -8) == '.invalid') {
+        debugging("email_to_user: User $user->id (".fullname($user).") email domain ($user->email) is invalid! Not sending.");
+        return true; // This is not an error.
     }
 
     // If the user is a remote mnet user, parse the email text for URL to the
@@ -5863,7 +5592,21 @@ function email_to_user($user, $from, $subject, $messagetext, $messagehtml = '', 
         } else {
             require_once($CFG->libdir.'/filelib.php');
             $mimetype = mimeinfo('type', $attachname);
-            $mail->addAttachment($CFG->dataroot .'/'. $attachment, $attachname, 'base64', $mimetype);
+
+            $attachmentpath = $attachment;
+
+            // Before doing the comparison, make sure that the paths are correct (Windows uses slashes in the other direction).
+            $attachpath = str_replace('\\', '/', $attachmentpath);
+            // Make sure both variables are normalised before comparing.
+            $temppath = str_replace('\\', '/', $CFG->tempdir);
+
+            // If the attachment is a full path to a file in the tempdir, use it as is,
+            // otherwise assume it is a relative path from the dataroot (for backwards compatibility reasons).
+            if (strpos($attachpath, realpath($temppath)) !== 0) {
+                $attachmentpath = $CFG->dataroot . '/' . $attachmentpath;
+            }
+
+            $mail->addAttachment($attachmentpath, $attachname, 'base64', $mimetype);
         }
     }
 
@@ -5975,18 +5718,7 @@ function setnew_password_and_mail($user, $fasthash = false) {
 
     $newpassword = generate_password();
 
-    $hashedpassword = hash_internal_user_password($newpassword, $fasthash);
-    $DB->set_field('user', 'password', $hashedpassword, array('id' => $user->id));
-    $user->password = $hashedpassword;
-
-    // Trigger event.
-    $event = \core\event\user_updated::create(array(
-        'objectid' => $user->id,
-        'relateduserid' => $user->id,
-        'context' => context_user::instance($user->id)
-    ));
-    $event->add_record_snapshot('user', $user);
-    $event->trigger();
+    update_internal_user_password($user, $newpassword, $fasthash);
 
     $a = new stdClass();
     $a->firstname   = fullname($user, true);
@@ -6770,6 +6502,26 @@ function get_string_manager($forcereload=false) {
                 $translist = explode(',', $CFG->langlist);
             }
 
+            if (!empty($CFG->config_php_settings['customstringmanager'])) {
+                $classname = $CFG->config_php_settings['customstringmanager'];
+
+                if (class_exists($classname)) {
+                    $implements = class_implements($classname);
+
+                    if (isset($implements['core_string_manager'])) {
+                        $singleton = new $classname($CFG->langotherroot, $CFG->langlocalroot, $translist);
+                        return $singleton;
+
+                    } else {
+                        debugging('Unable to instantiate custom string manager: class '.$classname.
+                            ' does not implement the core_string_manager interface.');
+                    }
+
+                } else {
+                    debugging('Unable to instantiate custom string manager: class '.$classname.' can not be found.');
+                }
+            }
+
             $singleton = new core_string_manager_standard($CFG->langotherroot, $CFG->langlocalroot, $translist);
 
         } else {
@@ -6998,53 +6750,6 @@ function get_list_of_themes() {
     core_collator::asort_objects_by_method($themes, 'get_theme_name');
 
     return $themes;
-}
-
-/**
- * Returns a list of timezones in the current language
- *
- * @return array
- */
-function get_list_of_timezones() {
-    global $DB;
-
-    static $timezones;
-
-    if (!empty($timezones)) {    // This function has been called recently.
-        return $timezones;
-    }
-
-    $timezones = array();
-
-    if ($rawtimezones = $DB->get_records_sql("SELECT MAX(id), name FROM {timezone} GROUP BY name")) {
-        foreach ($rawtimezones as $timezone) {
-            if (!empty($timezone->name)) {
-                if (get_string_manager()->string_exists(strtolower($timezone->name), 'timezones')) {
-                    $timezones[$timezone->name] = get_string(strtolower($timezone->name), 'timezones');
-                } else {
-                    $timezones[$timezone->name] = $timezone->name;
-                }
-                if (substr($timezones[$timezone->name], 0, 1) == '[') {  // No translation found.
-                    $timezones[$timezone->name] = $timezone->name;
-                }
-            }
-        }
-    }
-
-    asort($timezones);
-
-    for ($i = -13; $i <= 13; $i += .5) {
-        $tzstring = 'UTC';
-        if ($i < 0) {
-            $timezones[sprintf("%.1f", $i)] = $tzstring . $i;
-        } else if ($i > 0) {
-            $timezones[sprintf("%.1f", $i)] = $tzstring . '+' . $i;
-        } else {
-            $timezones[sprintf("%.1f", $i)] = $tzstring;
-        }
-    }
-
-    return $timezones;
 }
 
 /**
@@ -8594,7 +8299,23 @@ function getremoteaddr($default='0.0.0.0') {
     }
     if (!($variablestoskip & GETREMOTEADDR_SKIP_HTTP_X_FORWARDED_FOR)) {
         if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $address = cleanremoteaddr($_SERVER['HTTP_X_FORWARDED_FOR']);
+            $forwardedaddresses = explode(",", $_SERVER['HTTP_X_FORWARDED_FOR']);
+            $address = $forwardedaddresses[0];
+
+            if (substr_count($address, ":") > 1) {
+                // Remove port and brackets from IPv6.
+                if (preg_match("/\[(.*)\]:/", $address, $matches)) {
+                    $address = $matches[1];
+                }
+            } else {
+                // Remove port from IPv4.
+                if (substr_count($address, ":") == 1) {
+                    $parts = explode(":", $address);
+                    $address = $parts[0];
+                }
+            }
+
+            $address = cleanremoteaddr($address);
             return $address ? $address : $default;
         }
     }
@@ -8748,17 +8469,18 @@ function message_popup_window() {
 
     // A quick query to check whether the user has new messages.
     $messagecount = $DB->count_records('message', array('useridto' => $USER->id));
-    if ($messagecount<1) {
+    if ($messagecount < 1) {
         return;
     }
 
-    // Got unread messages so now do another query that joins with the user table.
-    $namefields = get_all_user_name_fields(true, 'u');
-    $messagesql = "SELECT m.id, m.smallmessage, m.fullmessageformat, m.notification, $namefields
+    // There are unread messages so now do a more complex but slower query.
+    $messagesql = "SELECT m.id, c.blocked
                      FROM {message} m
                      JOIN {message_working} mw ON m.id=mw.unreadmessageid
                      JOIN {message_processors} p ON mw.processorid=p.id
                      JOIN {user} u ON m.useridfrom=u.id
+                     LEFT JOIN {message_contacts} c ON c.contactid = m.useridfrom
+                                                   AND c.userid = m.useridto
                     WHERE m.useridto = :userid
                       AND p.name='popup'";
 
@@ -8769,48 +8491,22 @@ function message_popup_window() {
         $messagesql .= 'AND m.timecreated > :lastpopuptime';
     }
 
-    $messageusers = $DB->get_records_sql($messagesql, array('userid' => $USER->id, 'lastpopuptime' => $USER->message_lastpopup));
+    $waitingmessages = $DB->get_records_sql($messagesql, array('userid' => $USER->id, 'lastpopuptime' => $USER->message_lastpopup));
 
-    // If we have new messages to notify the user about.
-    if (!empty($messageusers)) {
-
-        $strmessages = '';
-        if (count($messageusers)>1) {
-            $strmessages = get_string('unreadnewmessages', 'message', count($messageusers));
+    $validmessages = 0;
+    foreach ($waitingmessages as $messageinfo) {
+        if ($messageinfo->blocked) {
+            // Message is from a user who has since been blocked so just mark it read.
+            // Get the full message to mark as read.
+            $messageobject = $DB->get_record('message', array('id' => $messageinfo->id));
+            message_mark_message_read($messageobject, time());
         } else {
-            $messageusers = reset($messageusers);
-
-            // Show who the message is from if its not a notification.
-            if (!$messageusers->notification) {
-                $strmessages = get_string('unreadnewmessage', 'message', fullname($messageusers) );
-            }
-
-            // Try to display the small version of the message.
-            $smallmessage = null;
-            if (!empty($messageusers->smallmessage)) {
-                // Display the first 200 chars of the message in the popup.
-                $smallmessage = null;
-                if (core_text::strlen($messageusers->smallmessage) > 200) {
-                    $smallmessage = core_text::substr($messageusers->smallmessage, 0, 200).'...';
-                } else {
-                    $smallmessage = $messageusers->smallmessage;
-                }
-
-                // Prevent html symbols being displayed.
-                if ($messageusers->fullmessageformat == FORMAT_HTML) {
-                    $smallmessage = html_to_text($smallmessage);
-                } else {
-                    $smallmessage = s($smallmessage);
-                }
-            } else if ($messageusers->notification) {
-                // Its a notification with no smallmessage so just say they have a notification.
-                $smallmessage = get_string('unreadnewnotification', 'message');
-            }
-            if (!empty($smallmessage)) {
-                $strmessages .= '<div id="usermessage">'.s($smallmessage).'</div>';
-            }
+            $validmessages++;
         }
+    }
 
+    if ($validmessages > 0) {
+        $strmessages = get_string('unreadnewmessages', 'message', $validmessages);
         $strgomessage = get_string('gotomessages', 'message');
         $strstaymessage = get_string('ignore', 'admin');
 
@@ -9002,11 +8698,25 @@ function get_performance_info() {
         $hits = 0;
         $misses = 0;
         $sets = 0;
-        foreach ($stats as $definition => $stores) {
-            $html .= '<span class="cache-definition-stats">';
-            $html .= '<span class="cache-definition-stats-heading">'.$definition.'</span>';
+        foreach ($stats as $definition => $details) {
+            switch ($details['mode']) {
+                case cache_store::MODE_APPLICATION:
+                    $modeclass = 'application';
+                    $mode = ' <span title="application cache">[a]</span>';
+                    break;
+                case cache_store::MODE_SESSION:
+                    $modeclass = 'session';
+                    $mode = ' <span title="session cache">[s]</span>';
+                    break;
+                case cache_store::MODE_REQUEST:
+                    $modeclass = 'request';
+                    $mode = ' <span title="request cache">[r]</span>';
+                    break;
+            }
+            $html .= '<span class="cache-definition-stats cache-mode-'.$modeclass.'">';
+            $html .= '<span class="cache-definition-stats-heading">'.$definition.$mode.'</span>';
             $text .= "$definition {";
-            foreach ($stores as $store => $data) {
+            foreach ($details['stores'] as $store => $data) {
                 $hits += $data['hits'];
                 $misses += $data['misses'];
                 $sets += $data['sets'];

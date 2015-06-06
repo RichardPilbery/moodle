@@ -1406,6 +1406,9 @@ abstract class enrol_plugin {
         $DB->update_record('user_enrolments', $ue);
         context_course::instance($instance->courseid)->mark_dirty(); // reset enrol caches
 
+        // Invalidate core_access cache for get_suspended_userids.
+        cache_helper::invalidate_by_definition('core', 'suspended_userids', array(), array($instance->courseid));
+
         // Trigger event.
         $event = \core\event\user_enrolment_updated::create(
                 array(
@@ -1535,12 +1538,31 @@ abstract class enrol_plugin {
     }
 
     /**
-     * Is it possible to delete enrol instance via standard UI?
-     *
-     * @param object $instance
-     * @return bool
+     * @deprecated since Moodle 2.8 MDL-35864 - please use can_delete_instance() instead.
      */
     public function instance_deleteable($instance) {
+        throw new coding_exception('Function enrol_plugin::instance_deleteable() is deprecated, use
+                enrol_plugin::can_delete_instance() instead');
+    }
+
+    /**
+     * Is it possible to delete enrol instance via standard UI?
+     *
+     * @param stdClass  $instance
+     * @return bool
+     */
+    public function can_delete_instance($instance) {
+        return false;
+    }
+
+    /**
+     * Is it possible to hide/show enrol instance via standard UI?
+     *
+     * @param stdClass $instance
+     * @return bool
+     */
+    public function can_hide_show_instance($instance) {
+        debugging("The enrolment plugin '".$this->get_name()."' should override the function can_hide_show_instance().", DEBUG_DEVELOPER);
         return true;
     }
 
@@ -2248,6 +2270,16 @@ abstract class enrol_plugin {
         }
 
         force_current_language($oldforcelang);
+    }
+
+    /**
+     * Backup execution step hook to annotate custom fields.
+     *
+     * @param backup_enrolments_execution_step $step
+     * @param stdClass $enrol
+     */
+    public function backup_annotate_custom_fields(backup_enrolments_execution_step $step, stdClass $enrol) {
+        // Override as necessary to annotate custom fields in the enrol table.
     }
 
     /**

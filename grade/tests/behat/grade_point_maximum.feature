@@ -19,7 +19,7 @@ Feature: We can change the grading type and maximum grade point values
       | Grade point maximum | 900 |
       | Grade point default | 800 |
     And I press "Save changes"
-    And I follow "Home"
+    And I am on site homepage
     And I follow "Course 1"
 
   @javascript
@@ -57,10 +57,10 @@ Feature: We can change the grading type and maximum grade point values
     And I follow "Edit settings"
     And I expand all fieldsets
     And I set the field "grade[modgrade_type]" to "Scale"
-    And I set the field "grade[modgrade_scale]" to "1"
+    And I set the field "grade[modgrade_scale]" to "Separate and Connected ways of knowing"
     And I press "Save and display"
     And I follow "Edit settings"
-    Then the field "grade[modgrade_scale]" matches value "1"
+    Then the field "grade[modgrade_scale]" matches value "Separate and Connected ways of knowing"
     And the "Maximum points" "field" should be disabled
     And I press "Save and return to course"
 
@@ -99,7 +99,7 @@ Feature: We can change the grading type and maximum grade point values
     And I set the following fields to these values:
       | Grade point maximum | 100 |
     And I press "Save changes"
-    And I follow "Home"
+    And I am on site homepage
     And I follow "Course 1"
     And I follow "Test Assignment 1"
     And I follow "Edit settings"

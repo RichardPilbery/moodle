@@ -7,8 +7,8 @@ Feature: A teacher can set available from and deadline dates to access a lesson
   Background:
     Given the following "users" exist:
       | username | firstname | lastname | email |
-      | teacher1 | Teacher | 1 | teacher1@asd.com |
-      | student1 | Student | 1 | student1@asd.com |
+      | teacher1 | Teacher | 1 | teacher1@example.com |
+      | student1 | Student | 1 | student1@example.com |
     And the following "courses" exist:
       | fullname | shortname | category |
       | Course 1 | C1 | 0 |
@@ -27,6 +27,7 @@ Feature: A teacher can set available from and deadline dates to access a lesson
     And I click on "id_available_enabled" "checkbox"
     And I set the following fields to these values:
       | Name | Test lesson |
+      | Description | Test lesson description |
       | available[day] | 1 |
       | available[month] | January |
       | available[year] | 2020 |
@@ -54,6 +55,7 @@ Feature: A teacher can set available from and deadline dates to access a lesson
     And I click on "id_deadline_enabled" "checkbox"
     And I set the following fields to these values:
       | Name | Test lesson |
+      | Description | Test lesson description |
       | deadline[day] | 1 |
       | deadline[month] | January |
       | deadline[year] | 2000 |
